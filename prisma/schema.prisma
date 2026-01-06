@@ -1,0 +1,722 @@
+// ===========================================
+// Crockd Forecasting - Database Schema
+// ===========================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ===========================================
+// Xero Connection & Sync
+// ===========================================
+
+model XeroTenant {
+  id              String   @id @default(cuid())
+  tenantId        String   @unique // Xero tenant ID
+  tenantName      String
+  tenantType      String   // ORGANISATION
+  accessToken     String   @db.Text
+  refreshToken    String   @db.Text
+  tokenExpiresAt  DateTime
+  connectedAt     DateTime @default(now())
+  lastSyncAt      DateTime?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  accounts         Account[]
+  contacts         Contact[]
+  bankTransactions BankTransaction[]
+  invoices         Invoice[]
+  bills            Bill[]
+  payments         Payment[]
+  manualJournals   ManualJournal[]
+  syncCheckpoints  SyncCheckpoint[]
+  rawXeroEvents    RawXeroEvent[]
+
+  @@map("xero_tenants")
+}
+
+model SyncCheckpoint {
+  id           String   @id @default(cuid())
+  tenantId     String
+  resourceType String   // accounts, contacts, invoices, bills, etc.
+  lastSyncAt   DateTime
+  cursor       String?  // Modified-since cursor or page token
+  status       String   @default("idle") // idle, syncing, error
+  errorMessage String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant XeroTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, resourceType])
+  @@map("sync_checkpoints")
+}
+
+model RawXeroEvent {
+  id          String   @id @default(cuid())
+  tenantId    String
+  resourceType String
+  resourceId  String
+  payload     Json
+  payloadHash String
+  fetchedAt   DateTime @default(now())
+
+  tenant XeroTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, resourceType, resourceId])
+  @@map("raw_xero_events")
+}
+
+// ===========================================
+// Chart of Accounts
+// ===========================================
+
+model Account {
+  id                String   @id @default(cuid())
+  tenantId          String
+  xeroAccountId     String   // Xero's AccountID
+  code              String?
+  name              String
+  type              String   // BANK, CURRENT, CURRLIAB, DEPRECIATN, DIRECTCOSTS, EQUITY, EXPENSE, FIXED, INVENTORY, LIABILITY, NONCURRENT, OTHERINCOME, OVERHEADS, PREPAYMENT, REVENUE, SALES, TERMLIAB, PAYGLIABILITY, SUPERANNUATIONEXPENSE, SUPERANNUATIONLIABILITY, WAGESEXPENSE
+  status            String   // ACTIVE, ARCHIVED
+  description       String?
+  taxType           String?
+  bankAccountNumber String?
+  bankAccountType   String?  // BANK, CREDITCARD, PAYPAL
+  currencyCode      String?
+  systemAccount     String?  // DEBTORS, CREDITORS, BANKCURRENCYGAIN, GST, GSTONIMPORTS, HISTORICAL, REALISEDCURRENCYGAIN, RETAINEDEARNINGS, ROUNDING, TRACKINGTRANSFERS, UNPAIDEXPCLAIMSBYYOU, UNPAIDEXPPAIDINCASH, UNPAIDEXPTRACKEDFORPAYROLLPAY, UNREALISEDCURRENCYGAIN, WAGESPAYABLELIABILITY
+  enablePayments    Boolean  @default(false)
+  showInExpenseClaims Boolean @default(false)
+  class             String?  // ASSET, EQUITY, EXPENSE, LIABILITY, REVENUE
+  reportingCode     String?
+  reportingCodeName String?
+  hasAttachments    Boolean  @default(false)
+  updatedDateUtc    DateTime?
+  addToWatchlist    Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenant XeroTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Relations
+  bankTransactionLines BankTransactionLine[]
+  invoiceLines         InvoiceLine[]
+  billLines            BillLine[]
+  journalLines         JournalLine[]
+  accountAssumptions   AccountAssumption[]
+  forecastLines        ForecastLine[]
+
+  @@unique([tenantId, xeroAccountId])
+  @@index([tenantId, code])
+  @@index([tenantId, type])
+  @@map("accounts")
+}
+
+// ===========================================
+// Contacts (Suppliers & Customers)
+// ===========================================
+
+model Contact {
+  id                String   @id @default(cuid())
+  tenantId          String
+  xeroContactId     String   // Xero's ContactID
+  name              String
+  firstName         String?
+  lastName          String?
+  emailAddress      String?
+  isSupplier        Boolean  @default(false)
+  isCustomer        Boolean  @default(false)
+  defaultCurrency   String?
+  taxNumber         String?
+  accountsReceivableTaxType String?
+  accountsPayableTaxType    String?
+  paymentTermsBillsDueDay      Int?
+  paymentTermsBillsDueDayMonth Int?
+  paymentTermsBillsType        String? // DAYSAFTERBILLDATE, DAYSAFTERBILLMONTH, OFCURRENTMONTH, OFFOLLOWINGMONTH
+  paymentTermsSalesDueDay      Int?
+  paymentTermsSalesDueDayMonth Int?
+  paymentTermsSalesType        String?
+  contactStatus     String   // ACTIVE, ARCHIVED, GDPRREQUEST
+  hasAttachments    Boolean  @default(false)
+  hasValidationErrors Boolean @default(false)
+  updatedDateUtc    DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenant XeroTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Relations
+  bankTransactions BankTransaction[]
+  invoices         Invoice[]
+  bills            Bill[]
+  payments         Payment[]
+
+  @@unique([tenantId, xeroContactId])
+  @@index([tenantId, name])
+  @@index([tenantId, isSupplier])
+  @@index([tenantId, isCustomer])
+  @@map("contacts")
+}
+
+// ===========================================
+// Bank Transactions
+// ===========================================
+
+model BankTransaction {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  xeroBankTransactionId String // Xero's BankTransactionID
+  type                String   // SPEND, RECEIVE, SPEND-OVERPAYMENT, RECEIVE-OVERPAYMENT, SPEND-PREPAYMENT, RECEIVE-PREPAYMENT, SPEND-TRANSFER, RECEIVE-TRANSFER
+  contactId           String?
+  bankAccountId       String   // Reference to bank account (not FK for flexibility)
+  bankAccountCode     String?
+  date                DateTime @db.Date
+  reference           String?
+  currencyCode        String?
+  currencyRate        Decimal? @db.Decimal(18, 10)
+  url                 String?
+  status              String   // AUTHORISED, DELETED, VOIDED
+  lineAmountTypes     String?  // Exclusive, Inclusive, NoTax
+  subTotal            Decimal  @db.Decimal(18, 2)
+  totalTax            Decimal  @db.Decimal(18, 2)
+  total               Decimal  @db.Decimal(18, 2)
+  isReconciled        Boolean  @default(false)
+  hasAttachments      Boolean  @default(false)
+  updatedDateUtc      DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenant  XeroTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact?   @relation(fields: [contactId], references: [id])
+
+  // Relations
+  lines BankTransactionLine[]
+
+  @@unique([tenantId, xeroBankTransactionId])
+  @@index([tenantId, date])
+  @@index([tenantId, contactId])
+  @@index([tenantId, type])
+  @@map("bank_transactions")
+}
+
+model BankTransactionLine {
+  id                String   @id @default(cuid())
+  bankTransactionId String
+  accountId         String?
+  description       String?
+  quantity          Decimal? @db.Decimal(18, 4)
+  unitAmount        Decimal? @db.Decimal(18, 4)
+  lineAmount        Decimal  @db.Decimal(18, 2)
+  taxType           String?
+  taxAmount         Decimal? @db.Decimal(18, 2)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  bankTransaction BankTransaction @relation(fields: [bankTransactionId], references: [id], onDelete: Cascade)
+  account         Account?        @relation(fields: [accountId], references: [id])
+
+  @@index([bankTransactionId])
+  @@map("bank_transaction_lines")
+}
+
+// ===========================================
+// Invoices (Accounts Receivable)
+// ===========================================
+
+model Invoice {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  xeroInvoiceId       String   // Xero's InvoiceID
+  type                String   // ACCPAY, ACCREC
+  contactId           String?
+  invoiceNumber       String?
+  reference           String?
+  date                DateTime @db.Date
+  dueDate             DateTime @db.Date
+  expectedPaymentDate DateTime? @db.Date
+  plannedPaymentDate  DateTime? @db.Date
+  status              String   // DRAFT, SUBMITTED, AUTHORISED, PAID, VOIDED, DELETED
+  lineAmountTypes     String?  // Exclusive, Inclusive, NoTax
+  subTotal            Decimal  @db.Decimal(18, 2)
+  totalTax            Decimal  @db.Decimal(18, 2)
+  total               Decimal  @db.Decimal(18, 2)
+  amountDue           Decimal  @db.Decimal(18, 2)
+  amountPaid          Decimal  @db.Decimal(18, 2)
+  amountCredited      Decimal  @db.Decimal(18, 2)
+  currencyCode        String?
+  currencyRate        Decimal? @db.Decimal(18, 10)
+  fullyPaidOnDate     DateTime? @db.Date
+  url                 String?
+  sentToContact       Boolean  @default(false)
+  hasAttachments      Boolean  @default(false)
+  hasErrors           Boolean  @default(false)
+  updatedDateUtc      DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenant  XeroTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact?   @relation(fields: [contactId], references: [id])
+
+  // Relations
+  lines    InvoiceLine[]
+  payments InvoicePayment[]
+
+  @@unique([tenantId, xeroInvoiceId])
+  @@index([tenantId, date])
+  @@index([tenantId, dueDate])
+  @@index([tenantId, contactId])
+  @@index([tenantId, status])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  xeroLineId  String?  // Xero's LineItemID
+  accountId   String?
+  description String?
+  quantity    Decimal? @db.Decimal(18, 4)
+  unitAmount  Decimal? @db.Decimal(18, 4)
+  lineAmount  Decimal  @db.Decimal(18, 2)
+  taxType     String?
+  taxAmount   Decimal? @db.Decimal(18, 2)
+  itemCode    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  invoice Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  account Account? @relation(fields: [accountId], references: [id])
+
+  @@index([invoiceId])
+  @@map("invoice_lines")
+}
+
+// ===========================================
+// Bills (Accounts Payable)
+// ===========================================
+
+model Bill {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  xeroBillId          String   // Xero's InvoiceID (bills are type ACCPAY invoices)
+  contactId           String?
+  invoiceNumber       String?
+  reference           String?
+  date                DateTime @db.Date
+  dueDate             DateTime @db.Date
+  expectedPaymentDate DateTime? @db.Date
+  plannedPaymentDate  DateTime? @db.Date
+  status              String   // DRAFT, SUBMITTED, AUTHORISED, PAID, VOIDED, DELETED
+  lineAmountTypes     String?  // Exclusive, Inclusive, NoTax
+  subTotal            Decimal  @db.Decimal(18, 2)
+  totalTax            Decimal  @db.Decimal(18, 2)
+  total               Decimal  @db.Decimal(18, 2)
+  amountDue           Decimal  @db.Decimal(18, 2)
+  amountPaid          Decimal  @db.Decimal(18, 2)
+  amountCredited      Decimal  @db.Decimal(18, 2)
+  currencyCode        String?
+  currencyRate        Decimal? @db.Decimal(18, 10)
+  fullyPaidOnDate     DateTime? @db.Date
+  url                 String?
+  hasAttachments      Boolean  @default(false)
+  hasErrors           Boolean  @default(false)
+  updatedDateUtc      DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenant  XeroTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact?   @relation(fields: [contactId], references: [id])
+
+  // Relations
+  lines    BillLine[]
+  payments BillPayment[]
+
+  @@unique([tenantId, xeroBillId])
+  @@index([tenantId, date])
+  @@index([tenantId, dueDate])
+  @@index([tenantId, contactId])
+  @@index([tenantId, status])
+  @@map("bills")
+}
+
+model BillLine {
+  id          String   @id @default(cuid())
+  billId      String
+  xeroLineId  String?  // Xero's LineItemID
+  accountId   String?
+  description String?
+  quantity    Decimal? @db.Decimal(18, 4)
+  unitAmount  Decimal? @db.Decimal(18, 4)
+  lineAmount  Decimal  @db.Decimal(18, 2)
+  taxType     String?
+  taxAmount   Decimal? @db.Decimal(18, 2)
+  itemCode    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  bill    Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+  account Account? @relation(fields: [accountId], references: [id])
+
+  @@index([billId])
+  @@map("bill_lines")
+}
+
+// ===========================================
+// Payments
+// ===========================================
+
+model Payment {
+  id              String   @id @default(cuid())
+  tenantId        String
+  xeroPaymentId   String   // Xero's PaymentID
+  date            DateTime @db.Date
+  currencyCode    String?
+  currencyRate    Decimal? @db.Decimal(18, 10)
+  amount          Decimal  @db.Decimal(18, 2)
+  reference       String?
+  isReconciled    Boolean  @default(false)
+  status          String   // AUTHORISED, DELETED
+  paymentType     String?  // ACCRECPAYMENT, ACCPAYPAYMENT, ARCREDITPAYMENT, APCREDITPAYMENT, ARPREPAYMENTPAYMENT, APPREPAYMENTPAYMENT, AROVERPAYMENTPAYMENT, APOVERPAYMENTPAYMENT
+  bankAccountId   String?  // Reference to bank account
+  contactId       String?
+  hasAccount      Boolean  @default(false)
+  hasValidationErrors Boolean @default(false)
+  updatedDateUtc  DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant  XeroTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact?   @relation(fields: [contactId], references: [id])
+
+  // Relations
+  invoicePayments InvoicePayment[]
+  billPayments    BillPayment[]
+
+  @@unique([tenantId, xeroPaymentId])
+  @@index([tenantId, date])
+  @@index([tenantId, contactId])
+  @@map("payments")
+}
+
+model InvoicePayment {
+  id        String @id @default(cuid())
+  invoiceId String
+  paymentId String
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@unique([invoiceId, paymentId])
+  @@map("invoice_payments")
+}
+
+model BillPayment {
+  id        String @id @default(cuid())
+  billId    String
+  paymentId String
+
+  bill    Bill    @relation(fields: [billId], references: [id], onDelete: Cascade)
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@unique([billId, paymentId])
+  @@map("bill_payments")
+}
+
+// ===========================================
+// Manual Journals
+// ===========================================
+
+model ManualJournal {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  xeroManualJournalId String   // Xero's ManualJournalID
+  date                DateTime @db.Date
+  narration           String?
+  status              String   // DRAFT, POSTED, DELETED, VOIDED, ARCHIVED
+  lineAmountTypes     String?  // Exclusive, Inclusive, NoTax
+  showOnCashBasis     Boolean  @default(true)
+  hasAttachments      Boolean  @default(false)
+  url                 String?
+  updatedDateUtc      DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenant XeroTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Relations
+  lines JournalLine[]
+
+  @@unique([tenantId, xeroManualJournalId])
+  @@index([tenantId, date])
+  @@map("manual_journals")
+}
+
+model JournalLine {
+  id              String   @id @default(cuid())
+  manualJournalId String
+  accountId       String?
+  description     String?
+  lineAmount      Decimal  @db.Decimal(18, 2)
+  taxType         String?
+  taxAmount       Decimal? @db.Decimal(18, 2)
+  isBlank         Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  manualJournal ManualJournal @relation(fields: [manualJournalId], references: [id], onDelete: Cascade)
+  account       Account?      @relation(fields: [accountId], references: [id])
+
+  @@index([manualJournalId])
+  @@map("journal_lines")
+}
+
+// ===========================================
+// Scenarios & Forecasting
+// ===========================================
+
+model Scenario {
+  id              String   @id @default(cuid())
+  name            String
+  description     String?
+  isActive        Boolean  @default(true)
+  isBase          Boolean  @default(false)
+  baseScenarioId  String?  // For cloned scenarios
+  color           String?  // For UI distinction
+  lockedUntil     DateTime? @db.Date // Prevent edits to months before this date
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  baseScenario     Scenario?  @relation("ScenarioClones", fields: [baseScenarioId], references: [id])
+  clonedScenarios  Scenario[] @relation("ScenarioClones")
+
+  // Relations
+  accountAssumptions AccountAssumption[]
+  forecastOutputs    ForecastOutput[]
+  forecastLines      ForecastLine[]
+  varianceSnapshots  VarianceSnapshot[]
+
+  @@map("scenarios")
+}
+
+model AssumptionTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  industry    String?
+  isDefault   Boolean  @default(false)
+  config      Json     // Template configuration
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("assumption_templates")
+}
+
+model AccountAssumption {
+  id          String   @id @default(cuid())
+  scenarioId  String
+  accountId   String
+  method      String   // flat, mom_growth, yoy_growth, seasonality, step_change, driver, manual
+  parameters  Json     // Method-specific parameters
+  isEnabled   Boolean  @default(true)
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  scenario Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  account  Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  // Relations
+  overrides MonthlyOverride[]
+
+  @@unique([scenarioId, accountId])
+  @@index([scenarioId])
+  @@index([accountId])
+  @@map("account_assumptions")
+}
+
+model MonthlyOverride {
+  id           String   @id @default(cuid())
+  assumptionId String
+  month        DateTime @db.Date // First of month
+  value        Decimal  @db.Decimal(18, 2)
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assumption AccountAssumption @relation(fields: [assumptionId], references: [id], onDelete: Cascade)
+
+  @@unique([assumptionId, month])
+  @@index([assumptionId])
+  @@map("monthly_overrides")
+}
+
+// ===========================================
+// Global Settings
+// ===========================================
+
+model GlobalSettings {
+  id    String @id @default(cuid())
+  key   String @unique
+  value Json
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("global_settings")
+}
+
+// Specific settings models for type safety
+model PayrollSettings {
+  id              String   @id @default(cuid())
+  cycle           String   // weekly, fortnightly, monthly
+  payDay          Int      // Day of week (1-7) for weekly/fortnightly, day of month for monthly
+  includeSuper    Boolean  @default(true)
+  superRate       Decimal  @db.Decimal(5, 2) // e.g., 11.5
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("payroll_settings")
+}
+
+model TaxSettings {
+  id                String   @id @default(cuid())
+  gstBasis          String   // cash, accrual
+  gstFrequency      String   // monthly, quarterly
+  payeFrequency     String   // monthly, quarterly
+  companyTaxRate    Decimal  @db.Decimal(5, 2) // e.g., 25.0
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("tax_settings")
+}
+
+// ===========================================
+// Forecast Outputs (Cached/Materialized)
+// ===========================================
+
+model ForecastOutput {
+  id             String   @id @default(cuid())
+  scenarioId     String
+  month          DateTime @db.Date // First of month
+  statementType  String   // pl, bs, cf (Profit & Loss, Balance Sheet, Cashflow)
+  data           Json     // Full statement data
+  balanceCheck   Decimal? @db.Decimal(18, 2) // For BS: should be 0
+  isValid        Boolean  @default(true)
+  generatedAt    DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  scenario Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+
+  @@unique([scenarioId, month, statementType])
+  @@index([scenarioId, month])
+  @@map("forecast_outputs")
+}
+
+model ForecastLine {
+  id          String   @id @default(cuid())
+  scenarioId  String
+  accountId   String
+  month       DateTime @db.Date // First of month
+  amount      Decimal  @db.Decimal(18, 2)
+  source      String   // assumption, override, calculated
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  scenario Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  account  Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([scenarioId, accountId, month])
+  @@index([scenarioId, month])
+  @@index([accountId])
+  @@map("forecast_lines")
+}
+
+// ===========================================
+// 13-Week Cash View
+// ===========================================
+
+model WeeklyCashForecast {
+  id            String   @id @default(cuid())
+  scenarioId    String?  // null for actuals-based
+  weekStartDate DateTime @db.Date
+  openingCash   Decimal  @db.Decimal(18, 2)
+  receipts      Decimal  @db.Decimal(18, 2)
+  payments      Decimal  @db.Decimal(18, 2)
+  payroll       Decimal  @db.Decimal(18, 2)
+  tax           Decimal  @db.Decimal(18, 2)
+  other         Decimal  @db.Decimal(18, 2)
+  closingCash   Decimal  @db.Decimal(18, 2)
+  details       Json?    // Breakdown by category/supplier
+  generatedAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([scenarioId, weekStartDate])
+  @@index([weekStartDate])
+  @@map("weekly_cash_forecasts")
+}
+
+// ===========================================
+// Variance Reporting
+// ===========================================
+
+model VarianceSnapshot {
+  id          String   @id @default(cuid())
+  scenarioId  String
+  month       DateTime @db.Date
+  accountId   String
+  forecast    Decimal  @db.Decimal(18, 2)
+  actual      Decimal  @db.Decimal(18, 2)
+  variance    Decimal  @db.Decimal(18, 2)
+  variancePct Decimal  @db.Decimal(8, 2)
+  isFavorable Boolean
+  notes       String?
+  generatedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  scenario Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+
+  @@unique([scenarioId, month, accountId])
+  @@index([scenarioId, month])
+  @@map("variance_snapshots")
+}
+
+// ===========================================
+// AI Chat History (Optional)
+// ===========================================
+
+model ChatConversation {
+  id        String   @id @default(cuid())
+  title     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages ChatMessage[]
+
+  @@map("chat_conversations")
+}
+
+model ChatMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  role           String   // user, assistant, system
+  content        String   @db.Text
+  toolCalls      Json?    // Tool calls made by assistant
+  toolResults    Json?    // Results from tool calls
+  citations      Json?    // Transaction/document citations
+  createdAt      DateTime @default(now())
+
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@map("chat_messages")
+}
