@@ -59,7 +59,8 @@ export async function topSuppliersByMonth(
     // Filter by account if specified
     if (accountFilters && accountFilters.length > 0) {
       const hasMatchingAccount = txn.lines.some(
-        (line) => line.account && accountFilters.includes(line.account.code || "")
+        (line: { account?: { code?: string | null } | null }) => 
+          line.account && accountFilters.includes(line.account.code || "")
       );
       if (!hasMatchingAccount) continue;
     }
