@@ -170,7 +170,10 @@ export async function supplierTrend(
       },
     });
 
-    const total = transactions.reduce((sum: number, txn) => sum + Math.abs(Number(txn.total)), 0);
+    let total = 0;
+    for (const txn of transactions) {
+      total += Math.abs(Number(txn.total));
+    }
     trend.push({
       month: format(monthDate, "MMM yyyy"),
       amount: total,
@@ -187,7 +190,10 @@ export async function supplierTrend(
     }
   }
 
-  const totalSpend = trend.reduce((sum: number, t) => sum + t.amount, 0);
+  let totalSpend = 0;
+  for (const t of trend) {
+    totalSpend += t.amount;
+  }
   const avgMonthly = totalSpend / months;
 
   const summary = `${contact.name} spend over ${months} months: Total $${totalSpend.toLocaleString()}, Average $${avgMonthly.toLocaleString()}/month`;
@@ -246,9 +252,12 @@ export async function monthlySpendSummary(month: Date): Promise<ToolResult> {
     .map(([type, amount]) => ({ type, amount }))
     .sort((a, b) => b.amount - a.amount);
 
-  const totalSpend = data.reduce((sum: number, d) => sum + d.amount, 0);
+  let totalSpendAmount = 0;
+  for (const d of data) {
+    totalSpendAmount += d.amount;
+  }
   const monthLabel = format(month, "MMMM yyyy");
-  const summary = `${monthLabel} spend summary: Total $${totalSpend.toLocaleString()} across ${data.length} categories`;
+  const summary = `${monthLabel} spend summary: Total $${totalSpendAmount.toLocaleString()} across ${data.length} categories`;
 
   return { data, citations, summary };
 }
