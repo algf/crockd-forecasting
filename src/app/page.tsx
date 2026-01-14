@@ -5,6 +5,7 @@ import { DashboardStats } from "@/components/dashboard/dashboard-stats";
 import { CashFlowChart } from "@/components/dashboard/cash-flow-chart";
 import { TopVariances } from "@/components/dashboard/top-variances";
 import { QuickActions } from "@/components/dashboard/quick-actions";
+import { CommentSection } from "@/components/comments";
 
 export default function DashboardPage() {
   return (
@@ -48,6 +49,9 @@ export default function DashboardPage() {
               <QuickActions />
             </CardContent>
           </Card>
+
+          {/* Community Comments */}
+          <CommentSection />
         </div>
       </PageContent>
     </PageContainer>
